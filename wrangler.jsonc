@@ -5,5 +5,8 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
+  },
+  "vars": {
+    "TOMTOM_API_KEY": "5KMdTAlB8AaoK8pqGPe83bo4HwbR5WFc"
   }
 }
