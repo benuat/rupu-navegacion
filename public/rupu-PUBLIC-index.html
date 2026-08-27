@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Rupu · Copiloto de ruta</title>
+
+<link rel="stylesheet" href="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps.css" />
+<script src="https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps-web.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #05070a;
+    --panel: rgba(13, 20, 30, 0.85);
+    --panel-border: rgba(255,255,255,0.07);
+    --text-hi: #eef4fa;
+    --text-mid: #a9b8c6;
+    --text-low: #6d7d8c;
+    --route: #22c3ff;
+    --route-glow: rgba(34, 195, 255, 0.55);
+    --ok: #3ddc9a;
+    --warn: #ff9a4d;
+    --danger: #ff5c5c;
+    --neutral: #46586a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg); color: var(--text-hi);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  #app { position: relative; height: 100vh; width: 100vw; overflow: hidden; }
+  #map { position: absolute; inset: 0; }
+
+  /* ---------- shell persistente: siempre visible, mismo diseño ---------- */
+  .top-row {
+    position: absolute; top: 16px; left: 12px; right: 12px;
+    display: flex; gap: 10px; align-items: flex-start;
+    z-index: 12;
+  }
+  .instruction-card {
+    flex: 1;
+    background: var(--panel);
+    backdrop-filter: blur(14px);
+    border: 1px solid var(--panel-border);
+    border-radius: 16px;
+    padding: 12px 14px;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.45);
+  }
+  .instruction-card .route-icon { flex-shrink: 0; }
+  .instruction-card .street {
+    font-family: 'Manrope', sans-serif;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--text-hi);
+    letter-spacing: -0.1px;
+    line-height: 1.25;
+  }
+  .instruction-card .meta { font-size: 11.5px; color: var(--text-mid); margin-top: 2px; }
+
+  .close-btn {
+    width: 42px; height: 42px; flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--panel);
+    backdrop-filter: blur(14px);
+    border: 1px solid var(--panel-border);
+    display: none; align-items: center; justify-content: center;
+    box-shadow: 0 10px 22px rgba(0,0,0,0.4);
+  }
+  .close-btn.visible { display: flex; }
+
+  .risk-dial {
+    position: absolute; top: 88px; left: 12px;
+    width: 60px; height: 60px;
+    border-radius: 50%;
+    background: #0c1621;
+    border: 2.5px solid var(--neutral);
+    box-shadow: 0 0 0 5px rgba(70,88,106,0.08), 0 8px 20px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 12;
+    transition: border-color .3s;
+  }
+  .risk-dial.bajo { border-color: var(--ok); box-shadow: 0 0 0 5px rgba(61,220,154,0.1); }
+  .risk-dial.medio { border-color: var(--warn); box-shadow: 0 0 0 5px rgba(255,154,77,0.1); }
+  .risk-dial.alto { border-color: var(--danger); box-shadow: 0 0 0 5px rgba(255,92,92,0.1); }
+  .risk-dial .n { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 18px; line-height: 1; }
+  .risk-dial .u { font-size: 8.5px; color: var(--text-mid); margin-top: 1px; }
+
+  .weather-card {
+    position: absolute; top: 88px; right: 12px;
+    background: var(--panel);
+    backdrop-filter: blur(14px);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 9px 12px;
+    display: flex; align-items: center; gap: 9px;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.4);
+    z-index: 12;
+    max-width: 62%;
+  }
+  .weather-card .wi { font-size: 20px; flex-shrink: 0; }
+  .weather-card .wname { font-weight: 700; font-size: 13px; }
+  .weather-card .wsub { font-size: 11.5px; color: var(--text-low); }
+  .weather-card.rain .wsub { color: var(--route); }
+  .weather-card.ok .wsub { color: var(--ok); }
+
+  .soon-icon {
+    position: absolute;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--panel-border);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 12;
+    opacity: 0.55;
+  }
+  .soon-icon .badge {
+    position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%);
+    font-size: 8px; color: var(--text-low); white-space: nowrap;
+    background: rgba(0,0,0,0.5); padding: 1px 5px; border-radius: 5px;
+  }
+
+  .start-pin, .end-pin { width: 16px; height: 16px; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+  .start-pin { background: var(--ok); }
+  .end-pin { background: var(--danger); }
+
+  /* ---------- hoja inferior: siempre presente, cambia su contenido interno ---------- */
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(180deg, rgba(9,15,23,0.95), rgba(5,7,10,0.99));
+    backdrop-filter: blur(20px);
+    border-top: 1px solid var(--panel-border);
+    border-radius: 24px 24px 0 0;
+    padding: 10px 18px 16px;
+    z-index: 15;
+    box-shadow: 0 -20px 40px rgba(0,0,0,0.5);
+    max-height: 68vh;
+    overflow-y: auto;
+  }
+  .grabber { width: 38px; height: 4px; border-radius: 3px; background: rgba(255,255,255,0.18); margin: 0 auto 12px; }
+
+  /* --- bloque de entrada (input) --- */
+  #input-block input {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--panel-border);
+    color: var(--text-hi);
+    padding: 13px 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    margin-bottom: 8px;
+    font-family: 'Inter', sans-serif;
+  }
+  #input-block input::placeholder { color: var(--text-low); }
+  #input-block button {
+    width: 100%;
+    background: linear-gradient(135deg, #35b8e8, #2f7bff);
+    color: white;
+    border: none;
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: 'Manrope', sans-serif;
+    cursor: pointer;
+  }
+  #input-block .hint { font-size: 11px; color: var(--text-low); margin: -2px 0 10px 2px; }
+
+  /* --- bloque de resultados --- */
+  #results-block { display: none; }
+  .updated { font-size: 11px; color: var(--text-low); margin-bottom: 10px; }
+
+  .stat-line { display: flex; align-items: center; gap: 18px; padding-bottom: 12px; }
+  .stat-item { display: flex; align-items: center; gap: 8px; }
+  .stat-num { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 19px; color: var(--text-hi); letter-spacing: -0.3px; }
+  .stat-label { font-size: 10.5px; color: var(--text-low); margin-top: 1px; }
+  .divider-v { width: 1px; height: 30px; background: var(--panel-border); }
+
+  .arrival-line {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 0;
+    border-top: 1px solid var(--panel-border);
+    border-bottom: 1px solid var(--panel-border);
+    margin-bottom: 12px;
+  }
+  .arrival-label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-mid); }
+  .arrival-time { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 16px; color: var(--route); }
+
+  #briefing-text {
+    background: rgba(255,255,255,0.04);
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text-hi);
+    margin-bottom: 12px;
+  }
+
+  .quick-row { display: flex; gap: 9px; margin-bottom: 4px; }
+  .quick-chip {
+    flex: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    padding: 9px 10px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .quick-chip .qc-text { display: flex; flex-direction: column; line-height: 1.25; }
+  .quick-chip .qc-label { font-size: 11px; font-weight: 700; }
+  .quick-chip .qc-dist { font-size: 10px; color: var(--text-low); }
+  .qc-rain .qc-label { color: var(--route); }
+  .qc-traffic .qc-label { color: var(--warn); }
+
+  #alerts-list { margin-top: 10px; }
+  .alert-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--panel-border);
+    font-size: 12.5px;
+    color: var(--text-mid);
+  }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-icon { font-size: 16px; }
+
+  .start-nav-btn {
+    width: 100%;
+    background: linear-gradient(135deg, #35b8e8, #2f7bff);
+    color: white;
+    border: none;
+    padding: 14px;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 800;
+    font-family: 'Manrope', sans-serif;
+    margin-bottom: 8px;
+    cursor: pointer;
+  }
+
+  /* ---------- modo navegación 3D ---------- */
+  #app.nav-mode .sheet,
+  #app.nav-mode .weather-card,
+  #app.nav-mode .risk-dial { display: none; }
+
+  .car-marker {
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 10px rgba(34,195,255,0.9));
+  }
+  .car-marker svg { transform-origin: center; }
+
+  .nav-speed-dial {
+    position: absolute; top: 88px; left: 12px;
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: #0c1621;
+    border: 2.5px solid var(--route);
+    box-shadow: 0 0 0 5px rgba(34,195,255,0.12), 0 8px 20px rgba(0,0,0,0.4);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 12;
+  }
+  #app.nav-mode .nav-speed-dial { display: flex; }
+  .nav-speed-dial .n { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 20px; line-height: 1; }
+  .nav-speed-dial .u { font-size: 8.5px; color: var(--text-mid); margin-top: 1px; }
+
+  .nav-bottom-panel {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(180deg, rgba(9,15,23,0.95), rgba(5,7,10,0.99));
+    backdrop-filter: blur(20px);
+    border-top: 1px solid var(--panel-border);
+    border-radius: 24px 24px 0 0;
+    padding: 12px 18px 16px;
+    z-index: 15;
+    box-shadow: 0 -20px 40px rgba(0,0,0,0.5);
+    display: none;
+  }
+  #app.nav-mode .nav-bottom-panel { display: block; }
+
+  .nav-stat-line { display: flex; align-items: center; gap: 18px; padding-bottom: 10px; }
+  .nav-stat-num { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 21px; color: var(--text-hi); }
+  .nav-stat-label { font-size: 10.5px; color: var(--text-low); margin-top: 1px; }
+
+  .nav-arrival-line {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0; margin-bottom: 10px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .nav-arrival-time { font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 17px; color: var(--route); }
+
+  .nav-chip-row { display: flex; gap: 8px; }
+  .nav-chip {
+    flex: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    padding: 8px 9px;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px;
+  }
+  .nav-chip .qc-label { font-weight: 700; display: block; }
+  .nav-chip .qc-dist { font-size: 10px; color: var(--text-low); display: block; }
+
+  .stop-nav-btn {
+    position: absolute; bottom: 14px; right: 14px;
+    background: rgba(20,25,35,0.9);
+    border: 1px solid var(--panel-border);
+    color: var(--text-mid);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 12px; font-weight: 700;
+    z-index: 16; display: none;
+  }
+  #app.nav-mode .stop-nav-btn { display: block; }
+
+  .nueva-ruta-btn {
+    width: 100%;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--panel-border);
+    color: var(--text-mid);
+    padding: 11px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: 'Inter', sans-serif;
+    margin-bottom: 6px;
+    cursor: pointer;
+  }
+
+  /* --- nav inferior: siempre presente --- */
+  .bottom-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-top: 14px; margin-top: 10px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10px; font-weight: 600;
+    color: var(--text-low);
+    background: none; border: none;
+    font-family: 'Inter', sans-serif;
+  }
+  .nav-item.active { color: var(--route); }
+  .nav-item.active .nav-r { color: var(--route); font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 14px; }
+  .nav-center {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #6f7bff, #3d4bd9 65%, #2c39b8);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 22px rgba(74,89,255,0.4);
+    margin-top: -16px;
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+
+  /* ---------- overlays ---------- */
+  #error-box {
+    position: absolute; top: 64px; left: 12px; right: 12px;
+    background: #2a1414; border: 1px solid var(--danger);
+    color: #ffb0b0; padding: 12px; border-radius: 12px;
+    font-size: 13px; z-index: 25; display: none;
+  }
+  #error-box.visible { display: block; }
+
+  #loading {
+    position: absolute; inset: 0;
+    background: rgba(5,7,10,0.75);
+    display: none;
+    align-items: center; justify-content: center;
+    z-index: 30;
+    font-size: 14px;
+    color: var(--text-mid);
+  }
+  #loading.visible { display: flex; }
+
+  #toast {
+    position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
+    background: rgba(20,25,35,0.95);
+    border: 1px solid var(--panel-border);
+    color: var(--text-hi);
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+    z-index: 40;
+    display: none;
+    white-space: nowrap;
+  }
+  #toast.visible { display: block; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+
+  <!-- Shell persistente: siempre visible, mismo diseño en todo momento -->
+  <div class="top-row">
+    <div class="instruction-card">
+      <svg class="route-icon" width="30" height="30" viewBox="0 0 24 24" fill="none">
+        <path id="route-icon-path" d="M12 21c-4-4-7-7.5-7-11a7 7 0 0 1 14 0c0 3.5-3 7-7 11Z" stroke="#22c3ff" stroke-width="1.8"/>
+        <circle id="route-icon-dot" cx="12" cy="10" r="2.2" stroke="#22c3ff" stroke-width="1.8"/>
+      </svg>
+      <div>
+        <div class="street" id="rt-origin-dest">Rupu · Copiloto de ruta</div>
+        <div class="meta" id="rt-eta-meta">Ingresa tu origen y destino abajo</div>
+      </div>
+    </div>
+    <button class="close-btn" id="close-route-btn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="#c7d3de" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <div class="risk-dial" id="risk-dial">
+    <div class="n" id="stat-riesgo">–</div>
+    <div class="u">riesgo</div>
+  </div>
+
+  <div class="weather-card" id="weather-card">
+    <div class="wi">🧭</div>
+    <div>
+      <div class="wname">Esperando</div>
+      <div class="wsub">tu ruta</div>
+    </div>
+  </div>
+
+  <div class="soon-icon" style="top: 154px; right: 16px;">⚠️<span class="badge">Próximamente</span></div>
+  <div class="soon-icon" style="top: 208px; right: 16px;">⛽<span class="badge">Próximamente</span></div>
+
+  <div class="nav-speed-dial" id="nav-speed-dial">
+    <div class="n" id="nav-speed">–</div>
+    <div class="u">km/h</div>
+  </div>
+
+  <button class="stop-nav-btn" id="stop-nav-btn">✕ Salir</button>
+
+  <div class="nav-bottom-panel" id="nav-bottom-panel">
+    <div class="nav-stat-line">
+      <div>
+        <div class="nav-stat-num" id="nav-time-left">–</div>
+        <div class="nav-stat-label">Tiempo restante</div>
+      </div>
+      <div class="divider-v"></div>
+      <div>
+        <div class="nav-stat-num" id="nav-dist-left">–</div>
+        <div class="nav-stat-label">Distancia</div>
+      </div>
+    </div>
+    <div class="nav-arrival-line">
+      <div class="arrival-label">Llegada estimada</div>
+      <div class="nav-arrival-time" id="nav-arrival-time">–</div>
+    </div>
+    <div class="nav-chip-row">
+      <div class="nav-chip"><span>🌧️</span><span><span class="qc-label">Lluvia</span><span class="qc-dist" id="nav-chip-lluvia">Sin datos</span></span></div>
+      <div class="nav-chip"><span>⚠️</span><span><span class="qc-label">Riesgo</span><span class="qc-dist" id="nav-chip-riesgo">–</span></span></div>
+      <div class="nav-chip"><span>🚦</span><span><span class="qc-label">Tráfico</span><span class="qc-dist" id="nav-chip-trafico">–</span></span></div>
+    </div>
+  </div>
+
+  <div id="error-box"></div>
+  <div id="loading">Calculando ruta y clima...</div>
+  <div id="toast"></div>
+
+  <div class="sheet">
+    <div class="grabber"></div>
+
+    <!-- Bloque de entrada: primer estado -->
+    <div id="input-block">
+      <input id="origin-input" type="text" placeholder="Origen (ej: Nancagua, Chile)" />
+      <input id="dest-input" type="text" placeholder="Destino (ej: Santiago, Chile)" />
+      <div class="hint">Escribe el nombre y presiona "Calcular ruta" — geocodificamos automáticamente.</div>
+      <button id="calc-btn">Calcular ruta</button>
+    </div>
+
+    <!-- Bloque de resultados: se muestra tras calcular -->
+    <div id="results-block">
+      <div class="updated" id="updated-at"></div>
+
+      <div class="stat-line">
+        <div class="stat-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M7 20 4 6l7 3 7-3-3 14" stroke="#22c3ff" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <div>
+            <div class="stat-num" id="stat-km">–</div>
+            <div class="stat-label">km</div>
+          </div>
+        </div>
+        <div class="divider-v"></div>
+        <div class="stat-item">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#22c3ff" stroke-width="1.8"/><path d="M12 7v5l3.5 2" stroke="#22c3ff" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <div>
+            <div class="stat-num" id="stat-time">–</div>
+            <div class="stat-label">duración</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrival-line">
+        <div class="arrival-label">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M5 21V4l14 3.5L5 11" stroke="#7d8fa0" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          Llegada estimada
+        </div>
+        <div class="arrival-time" id="arrival-time">–</div>
+      </div>
+
+      <div id="briefing-text">Calculando...</div>
+
+      <div class="quick-row">
+        <div class="quick-chip qc-rain">
+          <span style="font-size:15px;">🌧️</span>
+          <div class="qc-text"><span class="qc-label">Lluvia</span><span class="qc-dist" id="chip-lluvia-dist">Sin datos</span></div>
+        </div>
+        <div class="quick-chip qc-traffic">
+          <span style="font-size:15px;">🚦</span>
+          <div class="qc-text"><span class="qc-label">Tráfico</span><span class="qc-dist" id="chip-trafico-dist">Sin datos</span></div>
+        </div>
+      </div>
+
+      <div id="alerts-list"></div>
+
+      <button class="start-nav-btn" id="start-nav-btn">🚗 Iniciar navegación</button>
+      <button class="nueva-ruta-btn" id="nueva-ruta-btn">↺ Calcular otra ruta</button>
+    </div>
+
+    <div class="bottom-nav">
+      <button class="nav-item active" onclick="showToast('Ya estás aquí')">
+        <span class="nav-r">R</span>
+        RUPU
+      </button>
+      <button class="nav-item" onclick="showToast('Próximamente: guardar rutas frecuentes')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M8 3v14M16 7V21" stroke="#8a97a5" stroke-width="1.8" stroke-linecap="round"/><circle cx="8" cy="19" r="2" stroke="#8a97a5" stroke-width="1.8"/><circle cx="16" cy="5" r="2" stroke="#8a97a5" stroke-width="1.8"/></svg>
+        Rutas
+      </button>
+      <div class="nav-center" onclick="showToast('Asistente IA: próximamente')">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="4" y="7" width="16" height="12" rx="4" fill="#fff"/><circle cx="9" cy="13" r="1.4" fill="#3d4bd9"/><circle cx="15" cy="13" r="1.4" fill="#3d4bd9"/><path d="M12 7V4" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="3" r="1.3" fill="#fff"/></svg>
+      </div>
+      <button class="nav-item" onclick="showToast('Reportes comunitarios: próximamente')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3" stroke="#8a97a5" stroke-width="1.8"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5" stroke="#8a97a5" stroke-width="1.8" stroke-linecap="round"/><circle cx="18" cy="9" r="2.3" stroke="#8a97a5" stroke-width="1.8"/><path d="M15.5 20c.2-2.2 1.7-3.8 3.8-4" stroke="#8a97a5" stroke-width="1.8" stroke-linecap="round"/></svg>
+        Amigos
+      </button>
+      <button class="nav-item" onclick="showToast('Ajustes: próximamente')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="#8a97a5" stroke-width="1.8"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.5a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.6a7 7 0 0 0 0 2.4l-2 1.6 2 3.4 2.3-.9a7 7 0 0 0 2 1.2L10 21h4l.5-2.5a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.6c.1-.4.2-.8.2-1.2Z" stroke="#8a97a5" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        Ajustes
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const MAP_KEY = "5KMdTAlB8AaoK8pqGPe83bo4HwbR5WFc";
+  tt.setProductInfo("Rupu", "0.1");
+
+  const map = tt.map({
+    key: MAP_KEY, container: "map", center: [-71.0, -34.5], zoom: 8,
+    style: "https://api.tomtom.com/style/1/style/22.2.1-9/?map=basic_night&poi=poi_dark",
+  });
+
+  let mapReady = false;
+  let pendingRouteDraw = null;
+
+  map.on("load", () => {
+    map.addControl(new tt.NavigationControl());
+    mapReady = true;
+    if (pendingRouteDraw) {
+      drawRoute(pendingRouteDraw.points, pendingRouteDraw.origin, pendingRouteDraw.dest);
+      pendingRouteDraw = null;
+    }
+  });
+
+  let originCoords = null;
+  let destCoords = null;
+  let routeLayerAdded = false;
+  let startMarker = null;
+  let endMarker = null;
+  let lastRouteData = null;
+  let lastOriginQuery = "";
+  let lastDestQuery = "";
+
+  async function geocode(query) {
+    const url = `https://api.tomtom.com/search/2/geocode/${encodeURIComponent(query)}.json?key=${MAP_KEY}&limit=1&countrySet=CL`;
+    const res = await fetch(url);
+    const rawText = await res.text();
+    let data;
+    try { data = JSON.parse(rawText); }
+    catch (e) { throw new Error(`TomTom devolvió algo no-JSON (HTTP ${res.status}): ${rawText.slice(0, 150)}`); }
+    if (!res.ok) { throw new Error(`TomTom HTTP ${res.status}: ${JSON.stringify(data).slice(0, 150)}`); }
+    if (!data.results || data.results.length === 0) { throw new Error(`No se encontró: ${query}`); }
+    const r = data.results[0];
+    return { lat: r.position.lat, lon: r.position.lon, name: r.address.freeformAddress };
+  }
+
+  function showError(msg) {
+    const box = document.getElementById("error-box");
+    box.textContent = msg;
+    box.classList.add("visible");
+    setTimeout(() => box.classList.remove("visible"), 20000);
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("visible");
+    setTimeout(() => t.classList.remove("visible"), 2200);
+  }
+
+  function drawRoute(points, origin, dest) {
+    const coords = points.map((p) => [p[1], p[0]]);
+
+    if (routeLayerAdded) {
+      map.getSource("route").setData({ type: "Feature", geometry: { type: "LineString", coordinates: coords } });
+    } else {
+      map.addSource("route", { type: "geojson", data: { type: "Feature", geometry: { type: "LineString", coordinates: coords } } });
+      map.addLayer({ id: "route-glow", type: "line", source: "route", paint: { "line-color": "#22c3ff", "line-width": 14, "line-opacity": 0.25, "line-blur": 6 } });
+      map.addLayer({ id: "route-line", type: "line", source: "route", paint: { "line-color": "#22c3ff", "line-width": 5.5 } });
+      routeLayerAdded = true;
+    }
+
+    if (startMarker) startMarker.remove();
+    if (endMarker) endMarker.remove();
+
+    const startEl = document.createElement("div");
+    startEl.className = "start-pin";
+    startMarker = new tt.Marker({ element: startEl }).setLngLat([origin.lon, origin.lat]).addTo(map);
+
+    const endEl = document.createElement("div");
+    endEl.className = "end-pin";
+    endMarker = new tt.Marker({ element: endEl }).setLngLat([dest.lon, dest.lat]).addTo(map);
+
+    const bounds = coords.reduce((b, c) => b.extend(c), new tt.LngLatBounds(coords[0], coords[0]));
+    map.fitBounds(bounds, { padding: 70 });
+  }
+
+  function riesgoClass(r) {
+    if (r < 30) return "bajo";
+    if (r < 60) return "medio";
+    return "alto";
+  }
+
+  function volverAEntrada() {
+    document.getElementById("input-block").style.display = "block";
+    document.getElementById("results-block").style.display = "none";
+    document.getElementById("close-route-btn").classList.remove("visible");
+    document.getElementById("rt-origin-dest").textContent = "Rupu · Copiloto de ruta";
+    document.getElementById("rt-eta-meta").textContent = "Ingresa tu origen y destino abajo";
+    document.getElementById("risk-dial").className = "risk-dial";
+    document.getElementById("stat-riesgo").textContent = "–";
+    const wCard = document.getElementById("weather-card");
+    wCard.className = "weather-card";
+    wCard.querySelector(".wi").textContent = "🧭";
+    wCard.querySelector(".wname").textContent = "Esperando";
+    wCard.querySelector(".wsub").textContent = "tu ruta";
+  }
+
+  async function calcularRuta() {
+    const originQuery = document.getElementById("origin-input").value.trim();
+    const destQuery = document.getElementById("dest-input").value.trim();
+    if (!originQuery || !destQuery) { showError("Escribe origen y destino."); return; }
+
+    const loading = document.getElementById("loading");
+    loading.classList.add("visible");
+
+    try {
+      try { originCoords = await geocode(originQuery); }
+      catch (e) { throw new Error(`[Geocoding origen] ${e.message}`); }
+      try { destCoords = await geocode(destQuery); }
+      catch (e) { throw new Error(`[Geocoding destino] ${e.message}`); }
+
+      let data;
+      try {
+        const res = await fetch("/api/briefing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ origin: originCoords, destination: destCoords }),
+        });
+        const rawText = await res.text();
+        try { data = JSON.parse(rawText); }
+        catch (parseErr) { throw new Error(`Respuesta no es JSON (HTTP ${res.status}): ${rawText.slice(0, 200)}`); }
+      } catch (e) { throw new Error(`[Llamada a /api/briefing] ${e.message}`); }
+
+      if (data.error) {
+        showError("[Backend] " + data.error + (data.detail ? " — " + data.detail : ""));
+        loading.classList.remove("visible");
+        return;
+      }
+
+      lastRouteData = data;
+      lastOriginQuery = originQuery;
+      lastDestQuery = destQuery;
+
+      try {
+        if (mapReady) drawRoute(data.ruta.puntos, originCoords, destCoords);
+        else pendingRouteDraw = { points: data.ruta.puntos, origin: originCoords, dest: destCoords };
+      } catch (e) { throw new Error(`[Dibujar ruta en mapa] ${e.message}`); }
+
+      document.getElementById("input-block").style.display = "none";
+      document.getElementById("results-block").style.display = "block";
+      document.getElementById("close-route-btn").classList.add("visible");
+
+      document.getElementById("rt-origin-dest").textContent = `${originQuery} → ${destQuery}`;
+      document.getElementById("rt-eta-meta").textContent = `${data.resumen.distanciaKm} km · ${Math.floor(data.resumen.duracionMin/60)}h${data.resumen.duracionMin%60}m`;
+
+      document.getElementById("stat-km").textContent = data.resumen.distanciaKm;
+      const h = Math.floor(data.resumen.duracionMin / 60);
+      const m = data.resumen.duracionMin % 60;
+      document.getElementById("stat-time").textContent = `${h}h${m}m`;
+
+      const riesgoDial = document.getElementById("risk-dial");
+      riesgoDial.className = "risk-dial " + riesgoClass(data.resumen.riesgo);
+      document.getElementById("stat-riesgo").textContent = data.resumen.riesgo;
+
+      const arrival = new Date(Date.now() + data.resumen.duracionMin * 60000);
+      document.getElementById("arrival-time").textContent = arrival.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+
+      document.getElementById("briefing-text").textContent = data.briefing;
+      document.getElementById("updated-at").textContent = "Actualizado " + new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+
+      const wCard = document.getElementById("weather-card");
+      if (data.clima.alertas.length > 0) {
+        const primera = data.clima.alertas[0];
+        wCard.className = "weather-card rain";
+        wCard.querySelector(".wi").textContent = "🌧️";
+        wCard.querySelector(".wname").textContent = "Lluvia";
+        wCard.querySelector(".wsub").textContent = `en ${primera.distanciaKm} km`;
+      } else {
+        wCard.className = "weather-card ok";
+        wCard.querySelector(".wi").textContent = "☀️";
+        wCard.querySelector(".wname").textContent = "Sin alertas";
+        wCard.querySelector(".wsub").textContent = "clima despejado";
+      }
+
+      document.getElementById("chip-lluvia-dist").textContent =
+        data.clima.alertas.length > 0 ? `${data.clima.alertas[0].distanciaKm} km` : "Sin alertas";
+      document.getElementById("chip-trafico-dist").textContent =
+        data.resumen.trafficDelayMin > 0 ? `+${data.resumen.trafficDelayMin} min` : "Fluido";
+
+      const alertsList = document.getElementById("alerts-list");
+      alertsList.innerHTML = "";
+      data.clima.alertas.forEach((a) => {
+        const div = document.createElement("div");
+        div.className = "alert-item";
+        div.innerHTML = `<span class="alert-icon">🌧️</span> <span>Lluvia ${a.probabilidadLluvia}% en ${a.distanciaKm} km (cerca de las ${a.hora} hrs)${a.vientoKmh >= 50 ? `, viento ${Math.round(a.vientoKmh)} km/h` : ""}</span>`;
+        alertsList.appendChild(div);
+      });
+
+    } catch (err) {
+      showError("Error: " + err.message);
+    } finally {
+      loading.classList.remove("visible");
+    }
+  }
+
+  document.getElementById("calc-btn").addEventListener("click", calcularRuta);
+  document.getElementById("close-route-btn").addEventListener("click", volverAEntrada);
+  document.getElementById("nueva-ruta-btn").addEventListener("click", volverAEntrada);
+
+  /* ============ MODO NAVEGACIÓN 3D ============ */
+  let carMarker = null;
+  let navAnimId = null;
+  let navPath = [];       // [{lat, lon}, ...] en orden de recorrido
+  let navCumDist = [];    // distancia acumulada en metros hasta cada punto
+  let navTotalDist = 0;
+  let navStartTime = 0;
+  let navDurationMs = 0;  // duración simulada total de la animación
+  let navGuidance = [];
+  let navRealDurationMin = 0;
+  let navRealDistKm = 0;
+
+  function haversine(a, b) {
+    const R = 6371000;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLon = (b.lon - a.lon) * Math.PI / 180;
+    const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+    const h = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function bearingBetween(a, b) {
+    const la1 = a.lat * Math.PI / 180, la2 = b.lat * Math.PI / 180;
+    const dLon = (b.lon - a.lon) * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(la2);
+    const x = Math.cos(la1)*Math.sin(la2) - Math.sin(la1)*Math.cos(la2)*Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  function carSvg() {
+    return `<svg width="34" height="34" viewBox="0 0 34 34">
+      <circle cx="17" cy="17" r="16" fill="rgba(34,195,255,0.18)"/>
+      <g id="car-rotate" transform="rotate(0 17 17)">
+        <path d="M17 6 L24 24 L17 20 L10 24 Z" fill="#eef4fa" stroke="#22c3ff" stroke-width="1.5" stroke-linejoin="round"/>
+      </g>
+    </svg>`;
+  }
+
+  function startNavigation() {
+    if (!lastRouteData) return;
+    navGuidance = lastRouteData.ruta.guidance || [];
+    navRealDurationMin = lastRouteData.resumen.duracionMin;
+    navRealDistKm = lastRouteData.resumen.distanciaKm;
+
+    navPath = lastRouteData.ruta.puntos.map((p) => ({ lat: p[0], lon: p[1] }));
+    navCumDist = [0];
+    for (let i = 1; i < navPath.length; i++) {
+      navCumDist.push(navCumDist[i-1] + haversine(navPath[i-1], navPath[i]));
+    }
+    navTotalDist = navCumDist[navCumDist.length - 1] || 1;
+
+    // Duración simulada de la animación (recorrido visual, no tiempo real del viaje)
+    navDurationMs = Math.min(Math.max(navTotalDist / 25, 12000), 45000);
+    navStartTime = performance.now();
+
+    document.getElementById("app").classList.add("nav-mode");
+    document.getElementById("rt-eta-meta").textContent = "Navegando";
+
+    if (carMarker) carMarker.remove();
+    const el = document.createElement("div");
+    el.className = "car-marker";
+    el.innerHTML = carSvg();
+    carMarker = new tt.Marker({ element: el }).setLngLat([navPath[0].lon, navPath[0].lat]).addTo(map);
+
+    map.easeTo({ pitch: 62, zoom: 17, bearing: bearingBetween(navPath[0], navPath[Math.min(3, navPath.length-1)]), duration: 800 });
+
+    updateNavInstruction(0);
+    navTick();
+  }
+
+  function pointAtDistance(distMeters) {
+    for (let i = 1; i < navCumDist.length; i++) {
+      if (navCumDist[i] >= distMeters) {
+        const segLen = navCumDist[i] - navCumDist[i-1];
+        const t = segLen > 0 ? (distMeters - navCumDist[i-1]) / segLen : 0;
+        const a = navPath[i-1], b = navPath[i];
+        return { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t, idx: i };
+      }
+    }
+    return { ...navPath[navPath.length - 1], idx: navPath.length - 1 };
+  }
+
+  function updateNavInstruction(distMeters) {
+    let current = null;
+    for (let i = 0; i < navGuidance.length; i++) {
+      if (navGuidance[i].distanceMeters <= distMeters + 15) current = navGuidance[i + 1] || navGuidance[i];
+    }
+    if (!current && navGuidance.length > 0) current = navGuidance[0];
+    const street = document.getElementById("rt-origin-dest");
+    if (current) {
+      street.textContent = current.street || current.message || "Continúa recto";
+      const remainMeters = Math.max((current.distanceMeters || 0) - distMeters, 0);
+      document.getElementById("rt-eta-meta").textContent =
+        remainMeters > 950 ? `Próxima salida ${(remainMeters/1000).toFixed(1)} km` : `Próxima salida ${Math.round(remainMeters)} m`;
+    } else {
+      street.textContent = `${lastOriginQuery} → ${lastDestQuery}`;
+    }
+  }
+
+  function navTick() {
+    const now = performance.now();
+    const t = Math.min((now - navStartTime) / navDurationMs, 1);
+    const distMeters = t * navTotalDist;
+    const pos = pointAtDistance(distMeters);
+    const lookahead = pointAtDistance(Math.min(distMeters + 40, navTotalDist));
+    const bearing = bearingBetween(pos, lookahead);
+
+    if (carMarker) carMarker.setLngLat([pos.lon, pos.lat]);
+    const rotateEl = document.getElementById("car-rotate");
+    if (rotateEl) rotateEl.setAttribute("transform", `rotate(${bearing} 17 17)`);
+
+    map.easeTo({ center: [pos.lon, pos.lat], bearing, pitch: 62, duration: 260 });
+
+    const fractionLeft = 1 - t;
+    const timeLeftMin = Math.max(Math.round(navRealDurationMin * fractionLeft), 0);
+    const distLeftKm = Math.max((navRealDistKm * fractionLeft), 0);
+    document.getElementById("nav-time-left").textContent = timeLeftMin >= 60
+      ? `${Math.floor(timeLeftMin/60)}h ${timeLeftMin%60}m` : `${timeLeftMin} min`;
+    document.getElementById("nav-dist-left").textContent = `${distLeftKm.toFixed(0)} km`;
+
+    const arrival = new Date(Date.now() + timeLeftMin * 60000);
+    document.getElementById("nav-arrival-time").textContent = arrival.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" });
+
+    const simSpeed = Math.round(60 + Math.random() * 30);
+    document.getElementById("nav-speed").textContent = simSpeed;
+
+    updateNavInstruction(distMeters);
+
+    if (t < 1) {
+      navAnimId = requestAnimationFrame(navTick);
+    } else {
+      document.getElementById("rt-eta-meta").textContent = "Has llegado a tu destino";
+      showToast("🏁 Llegaste a tu destino");
+    }
+  }
+
+  function stopNavigation() {
+    if (navAnimId) cancelAnimationFrame(navAnimId);
+    document.getElementById("app").classList.remove("nav-mode");
+    if (carMarker) { carMarker.remove(); carMarker = null; }
+    map.easeTo({ pitch: 0, bearing: 0, duration: 600 });
+    if (lastRouteData) {
+      document.getElementById("rt-origin-dest").textContent = `${lastOriginQuery} → ${lastDestQuery}`;
+      document.getElementById("rt-eta-meta").textContent =
+        `${lastRouteData.resumen.distanciaKm} km · ${Math.floor(lastRouteData.resumen.duracionMin/60)}h${lastRouteData.resumen.duracionMin%60}m`;
+      const bounds = navPath.reduce((b, p) => b.extend([p.lon, p.lat]), new tt.LngLatBounds([navPath[0].lon, navPath[0].lat], [navPath[0].lon, navPath[0].lat]));
+      map.fitBounds(bounds, { padding: 70 });
+    }
+  }
+
+  document.getElementById("start-nav-btn").addEventListener("click", startNavigation);
+  document.getElementById("stop-nav-btn").addEventListener("click", stopNavigation);
+</script>
+</body>
+</html>
